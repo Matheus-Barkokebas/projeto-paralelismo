@@ -6,7 +6,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.StructuredTaskScope;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 public class Main {
 
@@ -142,6 +144,51 @@ public class Main {
         return resultado;
     }
 
+    private static double processarParaleloEstruturado(
+            double[][] matriz, int totalTarefas) throws InterruptedException {
+
+        int totalLinhas = matriz.length;
+        int tarefas = Math.min(totalTarefas, totalLinhas);
+        int linhasPorTarefa =
+                (int) Math.ceil((double) totalLinhas / tarefas);
+
+        double resultado = 0.0;
+
+        try (var scope = StructuredTaskScope.open()) {
+
+            List<Supplier<Double>> subtarefas = new ArrayList<>();
+
+            for (int t = 0; t < tarefas; t++) {
+
+                int linhaInicio = t * linhasPorTarefa;
+                int linhaFim =
+                        Math.min(linhaInicio + linhasPorTarefa, totalLinhas);
+
+                if (linhaInicio >= linhaFim) {
+                    continue;
+                }
+
+                final int inicio = linhaInicio;
+                final int fim = linhaFim;
+
+                subtarefas.add(scope.fork(() -> somarFaixa(matriz, inicio, fim)));
+            }
+
+            scope.join();
+
+            for (Supplier<Double> subtarefa : subtarefas) {
+                resultado += subtarefa.get();
+            }
+
+        } catch (StructuredTaskScope.FailedException e) {
+            throw new RuntimeException(
+                    "Falha ao processar a matriz em paralelo (estruturado)",
+                    e.getCause());
+        }
+
+        return resultado;
+    }
+
     private static void exibirMenu() {
 
         System.out.println();
@@ -158,13 +205,13 @@ public class Main {
     }
 
     private static void executarComparacao(
-            int linhas, int colunas, int totalTarefas) {
+            int linhas, int colunas, int totalTarefas) throws InterruptedException {
 
         System.out.println();
         System.out.println("------------------------------------------");
         System.out.println(
                 "Matriz: " + linhas + " x " + colunas
-                        + " | Tarefas (V2): " + totalTarefas);
+                        + " | Tarefas: " + totalTarefas);
         System.out.println("------------------------------------------");
 
         double[][] matriz = gerarMatriz(linhas, colunas);
@@ -173,28 +220,41 @@ public class Main {
         double resultadoSeq = processarSequencial(matriz);
         double tempoSeqMs = (System.nanoTime() - inicioSeq) / 1_000_000.0;
 
-        long inicioPar = System.nanoTime();
-        double resultadoPar =
+        long inicioParNaoEstr = System.nanoTime();
+        double resultadoParNaoEstr =
                 processarParaleloNaoEstruturado(matriz, totalTarefas);
-        double tempoParMs = (System.nanoTime() - inicioPar) / 1_000_000.0;
+        double tempoParNaoEstrMs =
+                (System.nanoTime() - inicioParNaoEstr) / 1_000_000.0;
 
-        double speedup = tempoSeqMs / tempoParMs;
-
-        boolean resultadoCorreto =
-                Math.abs(resultadoSeq - resultadoPar) < 1e-6;
+        long inicioParEstr = System.nanoTime();
+        double resultadoParEstr =
+                processarParaleloEstruturado(matriz, totalTarefas);
+        double tempoParEstrMs =
+                (System.nanoTime() - inicioParEstr) / 1_000_000.0;
 
         System.out.println();
         System.out.printf(Locale.US, "Resultado sequencial: %.6f%n", resultadoSeq);
-        System.out.printf(Locale.US, "Resultado paralelo:   %.6f%n", resultadoPar);
+        System.out.printf(Locale.US, "Resultado não estruturado: %.6f%n", resultadoParNaoEstr);
+        System.out.printf(Locale.US, "Resultado estruturado: %.6f%n", resultadoParEstr);
         System.out.println();
         System.out.printf(Locale.US, "Tempo sequencial: %.3f ms%n", tempoSeqMs);
-        System.out.printf(Locale.US, "Tempo paralelo:   %.3f ms%n", tempoParMs);
-        System.out.printf(Locale.US, "Speedup: %.2fx%n", speedup);
-        System.out.println("Resultado correto: " + resultadoCorreto);
+        System.out.printf(Locale.US,
+                "Tempo não estruturado: %.3f ms (%.2fx)%n",
+                tempoParNaoEstrMs, tempoSeqMs / tempoParNaoEstrMs);
+        System.out.printf(Locale.US,
+                "Tempo estruturado: %.3f ms (%.2fx)%n",
+                tempoParEstrMs, tempoSeqMs / tempoParEstrMs);
+        System.out.println();
+        System.out.println(
+                "Não estruturado correto: "
+                        + (Math.abs(resultadoSeq - resultadoParNaoEstr) < 1e-6));
+        System.out.println(
+                "Estruturado correto: "
+                        + (Math.abs(resultadoSeq - resultadoParEstr) < 1e-6));
         System.out.println("------------------------------------------");
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
 
         Scanner scanner = new Scanner(System.in);
 
@@ -215,8 +275,7 @@ public class Main {
                         default -> 2000;
                     };
 
-                    System.out.print(
-                            "Quantidade de tarefas para a V2 (paralela): ");
+                    System.out.print("Quantidade de tarefas (paralelo): ");
                     int totalTarefas = scanner.nextInt();
 
                     executarComparacao(tamanho, tamanho, totalTarefas);
